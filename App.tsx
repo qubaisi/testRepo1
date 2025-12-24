@@ -14,6 +14,7 @@ import SupportPage from './pages/Support';
 import ProfilePage from './pages/Profile';
 import { User, CartItem, Product, Order, Notification } from './types';
 import { translations } from './i18n';
+import { api } from './services/api';
 
 const App: React.FC = () => {
   const [lang, setLang] = useState<'en' | 'ar'>((localStorage.getItem('ud_lang') as 'en' | 'ar') || 'en');
@@ -32,25 +33,31 @@ const App: React.FC = () => {
   }, [lang]);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('cl_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-    const savedOrders = localStorage.getItem('cl_orders');
-    if (savedOrders) {
-      setOrders(JSON.parse(savedOrders));
-    }
-    const savedNotifications = localStorage.getItem('cl_notifications');
-    if (savedNotifications) {
-      setNotifications(JSON.parse(savedNotifications));
-    }
-    setIsLoading(false);
+    const initApp = async () => {
+      const savedUser = localStorage.getItem('cl_user');
+      if (savedUser) {
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+        // Sync orders from backend on mount
+        try {
+          const remoteOrders = await api.getOrders(parsedUser.id);
+          setOrders(remoteOrders);
+        } catch (e) {
+          console.error("Could not sync orders from backend");
+        }
+      }
+      
+      const savedNotifications = localStorage.getItem('cl_notifications');
+      if (savedNotifications) {
+        setNotifications(JSON.parse(savedNotifications));
+      }
+      setIsLoading(false);
+    };
+    initApp();
   }, []);
 
   useEffect(() => {
-    if (notifications.length > 0) {
-      localStorage.setItem('cl_notifications', JSON.stringify(notifications));
-    }
+    localStorage.setItem('cl_notifications', JSON.stringify(notifications));
   }, [notifications]);
 
   const handleLogin = (userData: User) => {
@@ -125,34 +132,28 @@ const App: React.FC = () => {
     setNotifications(prev => [newNotif, ...prev]);
   };
 
-  const placeOrder = (order: Order) => {
-    const newOrders = [order, ...orders];
-    setOrders(newOrders);
-    setCart([]);
-    localStorage.setItem('cl_orders', JSON.stringify(newOrders));
-
-    addNotification(
-      lang === 'ar' ? 'تأكيد الحجز' : 'Reservation Confirmed',
-      lang === 'ar' ? `تم حجز طلبك ${order.id} بنجاح. سنبدأ في تجهيز أضحيتك قريباً.` : `Your order ${order.id} has been successfully reserved. We will start preparing your sacrifice soon.`,
-      'order',
-      order.id
-    );
-
-    setTimeout(() => {
+  const placeOrder = async (orderData: Partial<Order>) => {
+    try {
+      const confirmedOrder = await api.placeOrder(orderData);
+      const newOrders = [confirmedOrder, ...orders];
+      setOrders(newOrders);
+      setCart([]);
+      
       addNotification(
-        lang === 'ar' ? 'تحديث المزرعة' : 'Farm Update',
-        lang === 'ar' ? 'أتم الطبيب البيطري فحص أضحيتك. كل شيء يبدو مثالياً!' : `The veterinarian has completed the health check for your sacrifice. All looks perfect!`,
-        'farm',
-        order.id
+        lang === 'ar' ? 'تأكيد الحجز' : 'Reservation Confirmed',
+        lang === 'ar' ? `تم حجز طلبك ${confirmedOrder.id} بنجاح. سنبدأ في تجهيز أضحيتك قريباً.` : `Your order ${confirmedOrder.id} has been successfully reserved. We will start preparing your sacrifice soon.`,
+        'order',
+        confirmedOrder.id
       );
-    }, 5000);
+    } catch (e) {
+      console.error("Order failed", e);
+    }
   };
 
   const cancelOrder = (orderId: string) => {
     const updatedOrders = orders.filter(o => o.id !== orderId);
     setOrders(updatedOrders);
-    localStorage.setItem('cl_orders', JSON.stringify(updatedOrders));
-
+    
     addNotification(
       lang === 'ar' ? 'تم إلغاء الطلب' : 'Order Cancelled',
       lang === 'ar' ? `تم إلغاء الطلب ${orderId} بنجاح وجاري استرجاع مبلغ الحجز.` : `Order ${orderId} has been successfully cancelled and your reservation fee is being processed.`,
@@ -170,12 +171,13 @@ const App: React.FC = () => {
     localStorage.removeItem('cl_notifications');
   };
 
-  const unreadCount = notifications.filter(n => !n.isRead).length;
-
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+      <div className="min-h-screen flex items-center justify-center bg-bg-dabeeha">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 bg-primary rounded-card flex items-center justify-center text-white font-black text-3xl shadow-level-2 animate-pulse">D</div>
+          <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+        </div>
       </div>
     );
   }
@@ -186,51 +188,21 @@ const App: React.FC = () => {
         user={user} 
         onLogout={handleLogout} 
         cartCount={cart.reduce((acc, i) => acc + i.quantity, 0)}
-        unreadNotifications={unreadCount}
+        unreadNotifications={notifications.filter(n => !n.isRead).length}
         lang={lang}
         toggleLanguage={toggleLanguage}
       >
         <Routes>
-          <Route 
-            path="/" 
-            element={user ? <Home addToCart={addToCart} lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/login" 
-            element={user ? <Navigate to="/" /> : <Login onLogin={handleLogin} lang={lang} />} 
-          />
-          <Route 
-            path="/register" 
-            element={user ? <Navigate to="/" /> : <Register onLogin={handleLogin} lang={lang} />} 
-          />
-          <Route 
-            path="/ai" 
-            element={user ? <AIChat lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/cart" 
-            element={user ? <Cart cart={cart} removeFromCart={removeFromCart} updateQuantity={updateCartQuantity} onPlaceOrder={placeOrder} lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/orders" 
-            element={user ? <OrderHistory orders={orders} onCancelOrder={cancelOrder} lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/notifications" 
-            element={user ? <NotificationsPage notifications={notifications} onMarkAllRead={markAllAsRead} onClearAll={clearNotifications} lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/support" 
-            element={user ? <SupportPage orders={orders} lang={lang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/profile" 
-            element={user ? <ProfilePage user={user} onUpdateProfile={handleUpdateProfile} onLogout={handleLogout} lang={lang} setLang={setLang} /> : <Navigate to="/login" />} 
-          />
-          <Route 
-            path="/product/:id" 
-            element={user ? <ProductDetail addToCart={addToCart} lang={lang} /> : <Navigate to="/login" />} 
-          />
+          <Route path="/" element={user ? <Home addToCart={addToCart} lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/login" element={user ? <Navigate to="/" /> : <Login onLogin={handleLogin} lang={lang} />} />
+          <Route path="/register" element={user ? <Navigate to="/" /> : <Register onLogin={handleLogin} lang={lang} />} />
+          <Route path="/ai" element={user ? <AIChat lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/cart" element={user ? <Cart cart={cart} removeFromCart={removeFromCart} updateQuantity={updateCartQuantity} onPlaceOrder={placeOrder} lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/orders" element={user ? <OrderHistory orders={orders} onCancelOrder={cancelOrder} lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/notifications" element={user ? <NotificationsPage notifications={notifications} onMarkAllRead={markAllAsRead} onClearAll={clearNotifications} lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/support" element={user ? <SupportPage orders={orders} lang={lang} /> : <Navigate to="/login" />} />
+          <Route path="/profile" element={user ? <ProfilePage user={user} onUpdateProfile={handleUpdateProfile} onLogout={handleLogout} lang={lang} setLang={setLang} /> : <Navigate to="/login" />} />
+          <Route path="/product/:id" element={user ? <ProductDetail addToCart={addToCart} lang={lang} /> : <Navigate to="/login" />} />
         </Routes>
       </Layout>
     </HashRouter>
