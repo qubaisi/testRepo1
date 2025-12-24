@@ -1,0 +1,7 @@
+{
+  "name": "Udhiya",
+  "description": "Premium Eid al-Adha sacrifice marketplace for sheep and calves, serving Cairo with scheduled deliveries.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
